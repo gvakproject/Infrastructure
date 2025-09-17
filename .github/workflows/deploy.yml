@@ -48,7 +48,7 @@ jobs:
         key: ${{ secrets.SSH_KEY }}
         source: "."
         target: "/home/${{ secrets.USERNAME }}/SteamInfrastructure"
-        strip_components: 1
+        strip_components: 0
         
     - name: Set executable permissions for scripts
       uses: appleboy/ssh-action@v1.0.3
@@ -57,7 +57,18 @@ jobs:
         username: ${{ secrets.USERNAME }}
         key: ${{ secrets.SSH_KEY }}
         script: |
-          chmod +x /home/${{ secrets.USERNAME }}/SteamInfrastructure/scripts/*.sh
+          cd /home/${{ secrets.USERNAME }}/SteamInfrastructure
+          
+          # Проверка, что файлы скопировались
+          echo "Проверка скопированных файлов:"
+          ls -la
+          echo "Проверка папки sql:"
+          ls -la sql/
+          echo "Проверка файла init.sql:"
+          ls -la sql/init.sql
+          
+          # Установка прав доступа
+          chmod +x scripts/*.sh
           echo "Права доступа установлены"
           
     - name: Stop existing containers
@@ -140,7 +151,7 @@ jobs:
           sql_ready=false
           
           while [ $attempt -lt $max_attempts ] && [ "$sql_ready" = false ]; do
-            if docker exec steam-sqlserver /opt/mssql-tools/bin/sqlcmd -S localhost -U "${{ secrets.SQL_SERVER_USERNAME }}" -P "${{ secrets.SQL_SERVER_PASSWORD }}" -Q "SELECT 1" >/dev/null 2>&1; then
+            if docker exec steam-sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U "sa" -P "${{ secrets.SQL_SERVER_PASSWORD }}" -Q "SELECT 1" >/dev/null 2>&1; then
               sql_ready=true
               echo "SQL Server готов к работе"
             else
@@ -166,14 +177,25 @@ jobs:
           # Выполнение SQL скрипта инициализации
           if [ -f "sql/init.sql" ]; then
             echo "Выполнение SQL скрипта инициализации..."
-            docker exec -i steam-sqlserver /opt/mssql-tools/bin/sqlcmd -S localhost -U "${{ secrets.SQL_SERVER_USERNAME }}" -P "${{ secrets.SQL_SERVER_PASSWORD }}" < "sql/init.sql"
+            docker exec -i steam-sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U "sa" -P "${{ secrets.SQL_SERVER_PASSWORD }}" < "sql/init.sql"
             if [ $? -eq 0 ]; then
               echo "SQL скрипт выполнен успешно"
+              
+              # Проверка, что база данных создана
+              echo "Проверка создания базы данных:"
+              docker exec steam-sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U "sa" -P "${{ secrets.SQL_SERVER_PASSWORD }}" -Q "SELECT name FROM sys.databases WHERE name = 'SteamInfrastructure'"
+              
+              # Проверка создания таблиц
+              echo "Проверка создания таблиц:"
+              docker exec steam-sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U "sa" -P "${{ secrets.SQL_SERVER_PASSWORD }}" -Q "USE SteamInfrastructure; SELECT name FROM sys.tables"
             else
               echo "ПРЕДУПРЕЖДЕНИЕ: Ошибка при выполнении SQL скрипта"
             fi
           else
-            echo "SQL скрипт не найден, пропускаем инициализацию"
+            echo "ОШИБКА: SQL скрипт не найден!"
+            echo "Содержимое директории sql:"
+            ls -la sql/
+            exit 1
           fi
           
     - name: Start Scrapoxy
@@ -195,17 +217,13 @@ jobs:
           }
           EOF
           
-          # Запуск Scrapoxy с исправленными переменными окружения
+          # Запуск Scrapoxy (возвращаем к рабочему состоянию)
           docker run -d --name steam-scrapoxy \
-            -p 8889:8889 -p 8891:8891 \
-            -e SCRAPOXY_USERNAME="${{ secrets.SCRAPOXY_USERNAME }}" \
-            -e SCRAPOXY_PASSWORD="${{ secrets.SCRAPOXY_PASSWORD }}" \
-            -e SCRAPOXY_BACKEND_SECRET="${{ secrets.SCRAPOXY_BACKEND_SECRET }}" \
-            -e SCRAPOXY_FRONTEND_SECRET="${{ secrets.SCRAPOXY_FRONTEND_SECRET }}" \
-            -e FRONTEND_JWT_SECRET="${{ secrets.SCRAPOXY_FRONTEND_SECRET }}" \
-            -e BACKEND_JWT_SECRET="${{ secrets.SCRAPOXY_BACKEND_SECRET }}" \
+            -p 8889:8888 -p 8891:8890 \
             -e AUTH_LOCAL_USERNAME="${{ secrets.SCRAPOXY_USERNAME }}" \
             -e AUTH_LOCAL_PASSWORD="${{ secrets.SCRAPOXY_PASSWORD }}" \
+            -e BACKEND_JWT_SECRET="${{ secrets.SCRAPOXY_BACKEND_SECRET }}" \
+            -e FRONTEND_JWT_SECRET="${{ secrets.SCRAPOXY_FRONTEND_SECRET }}" \
             -e STORAGE_FILE_FILENAME=/etc/scrapoxy/config.json \
             -v "$(pwd)/scrapoxy:/etc/scrapoxy" \
             --restart unless-stopped \
@@ -247,7 +265,7 @@ jobs:
           
           # Проверка доступности SQL Server
           echo "Проверка SQL Server:"
-          if docker exec steam-sqlserver /opt/mssql-tools/bin/sqlcmd -S localhost -U "${{ secrets.SQL_SERVER_USERNAME }}" -P "${{ secrets.SQL_SERVER_PASSWORD }}" -Q "SELECT @@VERSION" >/dev/null 2>&1; then
+          if docker exec steam-sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U "sa" -P "${{ secrets.SQL_SERVER_PASSWORD }}" -Q "SELECT @@VERSION" >/dev/null 2>&1; then
             echo "✓ SQL Server доступен"
           else
             echo "✗ SQL Server недоступен"
