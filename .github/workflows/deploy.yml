@@ -1,0 +1,251 @@
+name: Deploy SteamInfrastructure to EC2
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Create deployment directories on EC2
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.HOST }}
+        username: ${{ secrets.USERNAME }}
+        key: ${{ secrets.SSH_KEY }}
+        script: |
+          # Создание необходимых директорий
+          mkdir -p /home/${{ secrets.USERNAME }}/SteamInfrastructure
+          mkdir -p /home/${{ secrets.USERNAME }}/SteamInfrastructure/data/sqlserver
+          mkdir -p /home/${{ secrets.USERNAME }}/SteamInfrastructure/scrapoxy
+          mkdir -p /home/${{ secrets.USERNAME }}/SteamInfrastructure/sql
+          mkdir -p /home/${{ secrets.USERNAME }}/SteamInfrastructure/scripts
+          
+          # Установка прав доступа
+          chmod 755 /home/${{ secrets.USERNAME }}/SteamInfrastructure
+          chmod 755 /home/${{ secrets.USERNAME }}/SteamInfrastructure/data
+          chmod 755 /home/${{ secrets.USERNAME }}/SteamInfrastructure/data/sqlserver
+          chmod 755 /home/${{ secrets.USERNAME }}/SteamInfrastructure/scrapoxy
+          chmod 755 /home/${{ secrets.USERNAME }}/SteamInfrastructure/sql
+          chmod 755 /home/${{ secrets.USERNAME }}/SteamInfrastructure/scripts
+          
+          echo "Директории созданы успешно"
+          
+    - name: Copy project files to EC2
+      uses: appleboy/scp-action@v0.1.7
+      with:
+        host: ${{ secrets.HOST }}
+        username: ${{ secrets.USERNAME }}
+        key: ${{ secrets.SSH_KEY }}
+        source: "."
+        target: "/home/${{ secrets.USERNAME }}/SteamInfrastructure"
+        strip_components: 1
+        
+    - name: Set executable permissions for scripts
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.HOST }}
+        username: ${{ secrets.USERNAME }}
+        key: ${{ secrets.SSH_KEY }}
+        script: |
+          chmod +x /home/${{ secrets.USERNAME }}/SteamInfrastructure/scripts/*.sh
+          echo "Права доступа установлены"
+          
+    - name: Stop existing containers
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.HOST }}
+        username: ${{ secrets.USERNAME }}
+        key: ${{ secrets.SSH_KEY }}
+        script: |
+          cd /home/${{ secrets.USERNAME }}/SteamInfrastructure
+          
+          # Остановка существующих контейнеров
+          docker stop steam-sqlserver steam-scrapoxy 2>/dev/null || true
+          docker rm steam-sqlserver steam-scrapoxy 2>/dev/null || true
+          
+          echo "Существующие контейнеры остановлены"
+          
+    - name: Start SQL Server
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.HOST }}
+        username: ${{ secrets.USERNAME }}
+        key: ${{ secrets.SSH_KEY }}
+        script: |
+          cd /home/${{ secrets.USERNAME }}/SteamInfrastructure
+          
+          # Запуск SQL Server
+          docker run -d --name steam-sqlserver \
+            -p 1433:1433 \
+            -e ACCEPT_EULA=Y \
+            -e SA_PASSWORD="${{ secrets.SQL_SERVER_PASSWORD }}" \
+            -e MSSQL_PID=Express \
+            -e MSSQL_COLLATION=SQL_Latin1_General_CP1_CI_AS \
+            -v "$(pwd)/data/sqlserver:/var/opt/mssql" \
+            --restart unless-stopped \
+            mcr.microsoft.com/mssql/server:2022-latest
+            
+          if [ $? -eq 0 ]; then
+            echo "SQL Server запущен успешно"
+          else
+            echo "ОШИБКА: Не удалось запустить SQL Server!"
+            exit 1
+          fi
+          
+    - name: Wait for SQL Server to be ready
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.HOST }}
+        username: ${{ secrets.USERNAME }}
+        key: ${{ secrets.SSH_KEY }}
+        script: |
+          echo "Ожидание готовности SQL Server (30 секунд)..."
+          sleep 30
+          
+          # Проверка готовности SQL Server
+          max_attempts=10
+          attempt=0
+          sql_ready=false
+          
+          while [ $attempt -lt $max_attempts ] && [ "$sql_ready" = false ]; do
+            if docker exec steam-sqlserver /opt/mssql-tools/bin/sqlcmd -S localhost -U "${{ secrets.SQL_SERVER_USERNAME }}" -P "${{ secrets.SQL_SERVER_PASSWORD }}" -Q "SELECT 1" >/dev/null 2>&1; then
+              sql_ready=true
+              echo "SQL Server готов к работе"
+            else
+              attempt=$((attempt + 1))
+              echo "Попытка $attempt/$max_attempts - ожидание..."
+              sleep 5
+            fi
+          done
+          
+          if [ "$sql_ready" = false ]; then
+            echo "ПРЕДУПРЕЖДЕНИЕ: SQL Server может быть не готов. Продолжаем..."
+          fi
+          
+    - name: Initialize SQL Server database
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.HOST }}
+        username: ${{ secrets.USERNAME }}
+        key: ${{ secrets.SSH_KEY }}
+        script: |
+          cd /home/${{ secrets.USERNAME }}/SteamInfrastructure
+          
+          # Выполнение SQL скрипта инициализации
+          if [ -f "sql/init.sql" ]; then
+            echo "Выполнение SQL скрипта инициализации..."
+            docker exec -i steam-sqlserver /opt/mssql-tools/bin/sqlcmd -S localhost -U "${{ secrets.SQL_SERVER_USERNAME }}" -P "${{ secrets.SQL_SERVER_PASSWORD }}" < "sql/init.sql"
+            if [ $? -eq 0 ]; then
+              echo "SQL скрипт выполнен успешно"
+            else
+              echo "ПРЕДУПРЕЖДЕНИЕ: Ошибка при выполнении SQL скрипта"
+            fi
+          else
+            echo "SQL скрипт не найден, пропускаем инициализацию"
+          fi
+          
+    - name: Start Scrapoxy
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.HOST }}
+        username: ${{ secrets.USERNAME }}
+        key: ${{ secrets.SSH_KEY }}
+        script: |
+          cd /home/${{ secrets.USERNAME }}/SteamInfrastructure
+          
+          # Создание конфигурации Scrapoxy
+          cat > scrapoxy/config.json << EOF
+          {
+            "name": "steam-scrapoxy",
+            "version": "1.0.0",
+            "proxies": [],
+            "sessions": []
+          }
+          EOF
+          
+          # Запуск Scrapoxy
+          docker run -d --name steam-scrapoxy \
+            -p 8889:8888 -p 8891:8890 \
+            -e AUTH_LOCAL_USERNAME="${{ secrets.SCRAPOXY_USERNAME }}" \
+            -e AUTH_LOCAL_PASSWORD="${{ secrets.SCRAPOXY_PASSWORD }}" \
+            -e BACKEND_JWT_SECRET="${{ secrets.SCRAPOXY_BACKEND_SECRET }}" \
+            -e FRONTEND_JWT_SECRET="${{ secrets.SCRAPOXY_FRONTEND_SECRET }}" \
+            -e STORAGE_FILE_FILENAME=/etc/scrapoxy/config.json \
+            -v "$(pwd)/scrapoxy:/etc/scrapoxy" \
+            --restart unless-stopped \
+            scrapoxy/scrapoxy:latest
+            
+          if [ $? -eq 0 ]; then
+            echo "Scrapoxy запущен успешно"
+          else
+            echo "ОШИБКА: Не удалось запустить Scrapoxy!"
+            exit 1
+          fi
+          
+    - name: Wait for Scrapoxy to be ready
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.HOST }}
+        username: ${{ secrets.USERNAME }}
+        key: ${{ secrets.SSH_KEY }}
+        script: |
+          echo "Ожидание готовности Scrapoxy (10 секунд)..."
+          sleep 10
+          
+    - name: Verify deployment
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.HOST }}
+        username: ${{ secrets.USERNAME }}
+        key: ${{ secrets.SSH_KEY }}
+        script: |
+          echo "=== Проверка развертывания SteamInfrastructure ==="
+          
+          # Проверка статуса контейнеров
+          echo "Статус контейнеров:"
+          docker ps --filter "name=steam-"
+          
+          # Проверка портов
+          echo "Проверка портов:"
+          netstat -tlnp | grep -E ":(1433|8889|8891)" || echo "Порты не найдены в netstat"
+          
+          # Проверка доступности SQL Server
+          echo "Проверка SQL Server:"
+          if docker exec steam-sqlserver /opt/mssql-tools/bin/sqlcmd -S localhost -U "${{ secrets.SQL_SERVER_USERNAME }}" -P "${{ secrets.SQL_SERVER_PASSWORD }}" -Q "SELECT @@VERSION" >/dev/null 2>&1; then
+            echo "✓ SQL Server доступен"
+          else
+            echo "✗ SQL Server недоступен"
+          fi
+          
+          # Проверка доступности Scrapoxy
+          echo "Проверка Scrapoxy:"
+          if curl -s http://localhost:8889/api/health >/dev/null 2>&1; then
+            echo "✓ Scrapoxy API доступен"
+          else
+            echo "✗ Scrapoxy API недоступен"
+          fi
+          
+          if curl -s http://localhost:8891 >/dev/null 2>&1; then
+            echo "✓ Scrapoxy Web UI доступен"
+          else
+            echo "✗ Scrapoxy Web UI недоступен"
+          fi
+          
+          echo ""
+          echo "=== SteamInfrastructure успешно развернут! ==="
+          echo "Доступные сервисы:"
+          echo "  - SQL Server: ${{ secrets.HOST }}:1433"
+          echo "  - Scrapoxy API: http://${{ secrets.HOST }}:8889"
+          echo "  - Scrapoxy Web UI: http://${{ secrets.HOST }}:8891"
+          echo ""
+          echo "Для управления используйте скрипты в папке scripts/"

@@ -1,0 +1,65 @@
+# Environment variables (not used in this project)
+# .env files are not used as we only support GitHub Actions deployment
+
+# Data directories
+data/
+scrapoxy/
+
+# Logs
+*.log
+logs/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Docker
+.dockerignore
+
+# Node modules (if any)
+node_modules/
+
+# Python (if any)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Windows
+*.exe
+*.msi
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
