@@ -11,10 +11,20 @@ on:
         options:
         - production
         - staging
+      deploy_sql_server:
+        description: 'Deploy SQL Server'
+        required: false
+        default: true
+        type: boolean
+      deploy_scrapoxy:
+        description: 'Deploy Scrapoxy'
+        required: false
+        default: true
+        type: boolean
       skip_sql_init:
         description: 'Skip SQL database initialization'
         required: false
-        default: false
+        default: true
         type: boolean
 
 jobs:
@@ -28,6 +38,8 @@ jobs:
     - name: Display deployment parameters
       run: |
         echo "🚀 Starting deployment to: ${{ inputs.environment }}"
+        echo "🗄️ Deploy SQL Server: ${{ inputs.deploy_sql_server }}"
+        echo "🌐 Deploy Scrapoxy: ${{ inputs.deploy_scrapoxy }}"
         echo "📊 Skip SQL initialization: ${{ inputs.skip_sql_init }}"
         echo "⏰ Deployment started at: $(date)"
       
@@ -105,6 +117,7 @@ jobs:
           echo "Существующие контейнеры остановлены"
           
     - name: Start SQL Server
+      if: ${{ inputs.deploy_sql_server }}
       uses: appleboy/ssh-action@v1.0.3
       with:
         host: ${{ secrets.HOST }}
@@ -154,6 +167,7 @@ jobs:
           fi
           
     - name: Wait for SQL Server to be ready
+      if: ${{ inputs.deploy_sql_server }}
       uses: appleboy/ssh-action@v1.0.3
       with:
         host: ${{ secrets.HOST }}
@@ -184,7 +198,7 @@ jobs:
           fi
           
     - name: Initialize SQL Server database
-      if: ${{ !inputs.skip_sql_init }}
+      if: ${{ inputs.deploy_sql_server && !inputs.skip_sql_init }}
       uses: appleboy/ssh-action@v1.0.3
       with:
         host: ${{ secrets.HOST }}
@@ -236,6 +250,7 @@ jobs:
           fi
           
     - name: Start Scrapoxy
+      if: ${{ inputs.deploy_scrapoxy }}
       uses: appleboy/ssh-action@v1.0.3
       with:
         host: ${{ secrets.HOST }}
@@ -274,6 +289,7 @@ jobs:
           fi
           
     - name: Wait for Scrapoxy to be ready
+      if: ${{ inputs.deploy_scrapoxy }}
       uses: appleboy/ssh-action@v1.0.3
       with:
         host: ${{ secrets.HOST }}
@@ -300,33 +316,45 @@ jobs:
           echo "Проверка портов:"
           netstat -tlnp | grep -E ":(1433|8889|8891)" || echo "Порты не найдены в netstat"
           
-          # Проверка доступности SQL Server (необязательная)
-          echo "Проверка SQL Server:"
-          if docker exec steam-sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U "sa" -P "${{ secrets.SQL_SERVER_PASSWORD }}" -N -Q "SELECT @@VERSION" >/dev/null 2>&1; then
-            echo "✓ SQL Server доступен"
+          # Проверка доступности SQL Server (если развернут)
+          if [ "${{ inputs.deploy_sql_server }}" = "true" ]; then
+            echo "Проверка SQL Server:"
+            if docker exec steam-sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U "sa" -P "${{ secrets.SQL_SERVER_PASSWORD }}" -N -Q "SELECT @@VERSION" >/dev/null 2>&1; then
+              echo "✓ SQL Server доступен"
+            else
+              echo "⚠ SQL Server проверка пропущена (SSL ошибка, но сервер работает)"
+            fi
           else
-            echo "⚠ SQL Server проверка пропущена (SSL ошибка, но сервер работает)"
+            echo "⏭️ SQL Server не развернут (пропущено)"
           fi
           
-          # Проверка доступности Scrapoxy
-          echo "Проверка Scrapoxy:"
-          if curl -s http://localhost:8889/api/health >/dev/null 2>&1; then
-            echo "✓ Scrapoxy API доступен"
+          # Проверка доступности Scrapoxy (если развернут)
+          if [ "${{ inputs.deploy_scrapoxy }}" = "true" ]; then
+            echo "Проверка Scrapoxy:"
+            if curl -s http://localhost:8889/api/health >/dev/null 2>&1; then
+              echo "✓ Scrapoxy API доступен"
+            else
+              echo "✗ Scrapoxy API недоступен"
+            fi
+            
+            if curl -s http://localhost:8891 >/dev/null 2>&1; then
+              echo "✓ Scrapoxy Web UI доступен"
+            else
+              echo "✗ Scrapoxy Web UI недоступен"
+            fi
           else
-            echo "✗ Scrapoxy API недоступен"
-          fi
-          
-          if curl -s http://localhost:8891 >/dev/null 2>&1; then
-            echo "✓ Scrapoxy Web UI доступен"
-          else
-            echo "✗ Scrapoxy Web UI недоступен"
+            echo "⏭️ Scrapoxy не развернут (пропущено)"
           fi
           
           echo ""
           echo "=== SteamInfrastructure успешно развернут! ==="
-          echo "Доступные сервисы:"
-          echo "  - SQL Server: ${{ secrets.HOST }}:1433"
-          echo "  - Scrapoxy API: http://${{ secrets.HOST }}:8889"
-          echo "  - Scrapoxy Web UI: http://${{ secrets.HOST }}:8891"
+          echo "Развернутые сервисы:"
+          if [ "${{ inputs.deploy_sql_server }}" = "true" ]; then
+            echo "  - SQL Server: ${{ secrets.HOST }}:1433"
+          fi
+          if [ "${{ inputs.deploy_scrapoxy }}" = "true" ]; then
+            echo "  - Scrapoxy API: http://${{ secrets.HOST }}:8889"
+            echo "  - Scrapoxy Web UI: http://${{ secrets.HOST }}:8891"
+          fi
           echo ""
           echo "Для управления используйте скрипты в папке scripts/"
