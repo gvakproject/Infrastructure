@@ -1,9 +1,21 @@
 name: Deploy SteamInfrastructure to EC2
 
 on:
-  push:
-    branches: [ main, master ]
   workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+        - production
+        - staging
+      skip_sql_init:
+        description: 'Skip SQL database initialization'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   deploy:
@@ -12,6 +24,12 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      
+    - name: Display deployment parameters
+      run: |
+        echo "🚀 Starting deployment to: ${{ inputs.environment }}"
+        echo "📊 Skip SQL initialization: ${{ inputs.skip_sql_init }}"
+        echo "⏰ Deployment started at: $(date)"
       
     - name: Setup Docker Buildx
       uses: docker/setup-buildx-action@v3
@@ -166,6 +184,7 @@ jobs:
           fi
           
     - name: Initialize SQL Server database
+      if: ${{ !inputs.skip_sql_init }}
       uses: appleboy/ssh-action@v1.0.3
       with:
         host: ${{ secrets.HOST }}
@@ -173,6 +192,8 @@ jobs:
         key: ${{ secrets.SSH_KEY }}
         script: |
           cd /home/${{ secrets.USERNAME }}/SteamInfrastructure
+          
+          echo "🗄️ Initializing SQL Server database..."
           
           # Выполнение SQL скрипта инициализации
           if [ -f "sql/init.sql" ]; then
