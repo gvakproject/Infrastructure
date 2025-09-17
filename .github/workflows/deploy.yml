@@ -84,7 +84,11 @@ jobs:
         script: |
           cd /home/${{ secrets.USERNAME }}/SteamInfrastructure
           
-          # Запуск SQL Server
+          # Исправление прав доступа для SQL Server
+          sudo chown -R 10001:0 data/sqlserver
+          sudo chmod -R 777 data/sqlserver
+          
+          # Попытка запуска SQL Server с volume mapping
           docker run -d --name steam-sqlserver \
             -p 1433:1433 \
             -e ACCEPT_EULA=Y \
@@ -92,8 +96,26 @@ jobs:
             -e MSSQL_PID=Express \
             -e MSSQL_COLLATION=SQL_Latin1_General_CP1_CI_AS \
             -v "$(pwd)/data/sqlserver:/var/opt/mssql" \
+            --user 10001:0 \
             --restart unless-stopped \
             mcr.microsoft.com/mssql/server:2022-latest
+          
+          # Проверка успешности запуска
+          sleep 10
+          if ! docker ps | grep -q steam-sqlserver; then
+            echo "Первый запуск не удался, пробуем без volume mapping..."
+            docker rm steam-sqlserver 2>/dev/null || true
+            
+            # Запуск без volume mapping (данные в контейнере)
+            docker run -d --name steam-sqlserver \
+              -p 1433:1433 \
+              -e ACCEPT_EULA=Y \
+              -e SA_PASSWORD="${{ secrets.SQL_SERVER_PASSWORD }}" \
+              -e MSSQL_PID=Express \
+              -e MSSQL_COLLATION=SQL_Latin1_General_CP1_CI_AS \
+              --restart unless-stopped \
+              mcr.microsoft.com/mssql/server:2022-latest
+          fi
             
           if [ $? -eq 0 ]; then
             echo "SQL Server запущен успешно"
@@ -173,13 +195,17 @@ jobs:
           }
           EOF
           
-          # Запуск Scrapoxy
+          # Запуск Scrapoxy с исправленными переменными окружения
           docker run -d --name steam-scrapoxy \
-            -p 8889:8888 -p 8891:8890 \
+            -p 8889:8889 -p 8891:8891 \
+            -e SCRAPOXY_USERNAME="${{ secrets.SCRAPOXY_USERNAME }}" \
+            -e SCRAPOXY_PASSWORD="${{ secrets.SCRAPOXY_PASSWORD }}" \
+            -e SCRAPOXY_BACKEND_SECRET="${{ secrets.SCRAPOXY_BACKEND_SECRET }}" \
+            -e SCRAPOXY_FRONTEND_SECRET="${{ secrets.SCRAPOXY_FRONTEND_SECRET }}" \
+            -e FRONTEND_JWT_SECRET="${{ secrets.SCRAPOXY_FRONTEND_SECRET }}" \
+            -e BACKEND_JWT_SECRET="${{ secrets.SCRAPOXY_BACKEND_SECRET }}" \
             -e AUTH_LOCAL_USERNAME="${{ secrets.SCRAPOXY_USERNAME }}" \
             -e AUTH_LOCAL_PASSWORD="${{ secrets.SCRAPOXY_PASSWORD }}" \
-            -e BACKEND_JWT_SECRET="${{ secrets.SCRAPOXY_BACKEND_SECRET }}" \
-            -e FRONTEND_JWT_SECRET="${{ secrets.SCRAPOXY_FRONTEND_SECRET }}" \
             -e STORAGE_FILE_FILENAME=/etc/scrapoxy/config.json \
             -v "$(pwd)/scrapoxy:/etc/scrapoxy" \
             --restart unless-stopped \
