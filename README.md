@@ -74,7 +74,7 @@ SteamInfrastructure/
 - `HOST` - IP адрес EC2
 - `USERNAME` - пользователь для SSH
 - `SSH_KEY` - приватный SSH ключ
-- `SQL_SERVER_USERNAME` - имя пользователя SQL Server (обычно 'sa')
+- `SQL_SERVER_USERNAME` - имя пользователя SQL Server (всегда 'sa')
 - `SQL_SERVER_PASSWORD` - пароль SQL Server
 - `SCRAPOXY_USERNAME` - имя пользователя Scrapoxy
 - `SCRAPOXY_PASSWORD` - пароль Scrapoxy

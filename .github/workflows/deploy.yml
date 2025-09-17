@@ -151,7 +151,7 @@ jobs:
           sql_ready=false
           
           while [ $attempt -lt $max_attempts ] && [ "$sql_ready" = false ]; do
-            if docker exec steam-sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U "sa" -P "${{ secrets.SQL_SERVER_PASSWORD }}" -Q "SELECT 1" >/dev/null 2>&1; then
+            if docker exec steam-sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U "sa" -P "${{ secrets.SQL_SERVER_PASSWORD }}" -N -Q "SELECT 1" >/dev/null 2>&1; then
               sql_ready=true
               echo "SQL Server готов к работе"
             else
@@ -177,17 +177,17 @@ jobs:
           # Выполнение SQL скрипта инициализации
           if [ -f "sql/init.sql" ]; then
             echo "Выполнение SQL скрипта инициализации..."
-            docker exec -i steam-sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U "sa" -P "${{ secrets.SQL_SERVER_PASSWORD }}" < "sql/init.sql"
+            docker exec -i steam-sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U "sa" -P "${{ secrets.SQL_SERVER_PASSWORD }}" -N < "sql/init.sql"
             if [ $? -eq 0 ]; then
               echo "SQL скрипт выполнен успешно"
               
               # Проверка, что база данных создана
               echo "Проверка создания базы данных:"
-              docker exec steam-sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U "sa" -P "${{ secrets.SQL_SERVER_PASSWORD }}" -Q "SELECT name FROM sys.databases WHERE name = 'SteamInfrastructure'"
+              docker exec steam-sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U "sa" -P "${{ secrets.SQL_SERVER_PASSWORD }}" -N -Q "SELECT name FROM sys.databases WHERE name = 'SteamInfrastructure'"
               
               # Проверка создания таблиц
               echo "Проверка создания таблиц:"
-              docker exec steam-sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U "sa" -P "${{ secrets.SQL_SERVER_PASSWORD }}" -Q "USE SteamInfrastructure; SELECT name FROM sys.tables"
+              docker exec steam-sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U "sa" -P "${{ secrets.SQL_SERVER_PASSWORD }}" -N -Q "USE SteamInfrastructure; SELECT name FROM sys.tables"
             else
               echo "ПРЕДУПРЕЖДЕНИЕ: Ошибка при выполнении SQL скрипта"
             fi
@@ -265,7 +265,7 @@ jobs:
           
           # Проверка доступности SQL Server
           echo "Проверка SQL Server:"
-          if docker exec steam-sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U "sa" -P "${{ secrets.SQL_SERVER_PASSWORD }}" -Q "SELECT @@VERSION" >/dev/null 2>&1; then
+          if docker exec steam-sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U "sa" -P "${{ secrets.SQL_SERVER_PASSWORD }}" -N -Q "SELECT @@VERSION" >/dev/null 2>&1; then
             echo "✓ SQL Server доступен"
           else
             echo "✗ SQL Server недоступен"
