@@ -176,8 +176,11 @@ jobs:
           
           # Выполнение SQL скрипта инициализации
           if [ -f "sql/init.sql" ]; then
+            echo "Ожидание полной готовности SQL Server (30 секунд)..."
+            sleep 30
+            
             echo "Выполнение SQL скрипта инициализации..."
-            docker exec -i steam-sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U "sa" -P "${{ secrets.SQL_SERVER_PASSWORD }}" -N < "sql/init.sql"
+            docker exec -i steam-sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U "sa" -P "${{ secrets.SQL_SERVER_PASSWORD }}" -N -C < "sql/init.sql"
             if [ $? -eq 0 ]; then
               echo "SQL скрипт выполнен успешно"
               
@@ -189,7 +192,20 @@ jobs:
               echo "Проверка создания таблиц:"
               docker exec steam-sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U "sa" -P "${{ secrets.SQL_SERVER_PASSWORD }}" -N -Q "USE SteamInfrastructure; SELECT name FROM sys.tables"
             else
-              echo "ПРЕДУПРЕЖДЕНИЕ: Ошибка при выполнении SQL скрипта"
+              echo "ПРЕДУПРЕЖДЕНИЕ: Ошибка при выполнении SQL скрипта, пробуем альтернативный способ..."
+              
+              # Альтернативный способ - выполнение через bash
+              docker exec steam-sqlserver bash -c "cat /var/opt/mssql/data/init.sql 2>/dev/null || echo 'CREATE DATABASE SteamInfrastructure;' | /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P '${{ secrets.SQL_SERVER_PASSWORD }}' -N -C"
+              
+              # Копируем файл в контейнер и выполняем
+              docker cp sql/init.sql steam-sqlserver:/tmp/init.sql
+              docker exec steam-sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U "sa" -P "${{ secrets.SQL_SERVER_PASSWORD }}" -N -C -i /tmp/init.sql
+              
+              if [ $? -eq 0 ]; then
+                echo "SQL скрипт выполнен альтернативным способом"
+              else
+                echo "ОШИБКА: Не удалось выполнить SQL скрипт"
+              fi
             fi
           else
             echo "ОШИБКА: SQL скрипт не найден!"
